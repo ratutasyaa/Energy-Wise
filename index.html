@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnergyWise – Smart Energy Analyzer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; line-height: 1.5; }
+  fieldset { border: 1px solid #ccc; border-radius: 8px; margin-bottom: 16px; }
+  input, select, button { padding: 6px 8px; margin: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { border: 1px solid #bbb; padding: 6px; text-align: left; }
+  .error { color: #c0392b; font-weight: bold; }
+  .langkah { background: #f3f3f3; color: #222; padding: 8px; border-radius: 6px; font-family: monospace; font-size: 13px; white-space: pre-wrap; display: none; }
+  .kartu { display: flex; gap: 12px; flex-wrap: wrap; }
+  .kartu div { flex: 1; min-width: 150px; border: 1px solid #ccc; border-radius: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<h1>EnergyWise – Smart Energy Analyzer</h1>
+
+<fieldset>
+  <legend>1. Tarif dan Perangkat</legend>
+  Tarif (Rp/kWh): <input id="tarif" type="number" value="1500" min="1">
+  <p><small>Cek tarif PLN terbaru sesuai golongan daya kamu.</small></p>
+  <input id="nama" placeholder="Nama perangkat">
+  <input id="daya" type="number" placeholder="Daya (W)" min="1">
+  <input id="jam" type="number" placeholder="Jam per hari" min="0" max="24" step="0.5">
+  <input id="jumlah" type="number" placeholder="Jumlah unit" value="1" min="1">
+  <button onclick="tambah()">Tambah</button>
+  <button onclick="resetData()">Reset</button>
+  <div id="pesan" class="error"></div>
+</fieldset>
+
+<fieldset>
+  <legend>2. Hasil Analisis</legend>
+  <table>
+    <thead><tr><th>Peringkat</th><th>Perangkat</th><th>kWh/bulan</th><th>Biaya/bulan</th><th>Kontribusi</th><th></th></tr></thead>
+    <tbody id="tabel"></tbody>
+  </table>
+  <div class="kartu">
+    <div>Total konsumsi<br><b id="totalKWh">0</b></div>
+    <div>Total biaya<br><b id="totalBiaya">Rp 0</b></div>
+    <div>Rata-rata per perangkat<br><b id="rataKWh">0</b></div>
+    <div>Median<br><b id="medianKWh">0</b></div>
+  </div>
+  <canvas id="grafik" height="120"></canvas>
+  <p><label><input type="checkbox" id="mode" onchange="tampilkan()"> Tampilkan langkah perhitungan</label></p>
+  <div id="langkah" class="langkah"></div>
+</fieldset>
+
+<fieldset>
+  <legend>3. Simulasi Penghematan</legend>
+  <select id="pilihSim"></select>
+  Kurangi pemakaian (jam/hari): <input id="jamKurang" type="number" value="1" min="0" step="0.5">
+  <button onclick="simulasi()">Hitung</button>
+  <div id="hasilSim"></div>
+</fieldset>
+
+<script>
+const HARI = 30;
+let perangkat = [];
+let chart = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const rp = x => "Rp " + Math.round(x).toLocaleString("id-ID");
+const angka = (x, d = 2) => x.toLocaleString("id-ID", { maximumFractionDigits: d });
+
+// ===== Fungsi matematika =====
+function hitungKWh(daya, jam, jumlah = 1) { return daya * jam * jumlah * HARI / 1000; }
+function hitungBiaya(kwh, tarif) { return kwh * tarif; }
+function hitungPersen(bagian, total) { return total === 0 ? 0 : (bagian / total) * 100; }
+function median(nilai) {
+  if (nilai.length === 0) return 0;
+  const a = [...nilai].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+// ===== Pengurutan bubble sort (menurun) =====
+function urutkanTurun(arr, kunci) {
+  const a = [...arr];
+  for (let i = 0; i < a.length - 1; i++)
+    for (let j = 0; j < a.length - 1 - i; j++)
+      if (a[j][kunci] < a[j + 1][kunci]) [a[j], a[j + 1]] = [a[j + 1], a[j]];
+  return a;
+}
+
+// ===== Validasi input =====
+function validasi(nama, daya, jam, jumlah) {
+  if (!nama) return "Nama perangkat wajib diisi.";
+  if (!(daya > 0)) return "Daya harus lebih dari 0 W.";
+  if (!(jam > 0 && jam <= 24)) return "Jam pemakaian harus antara 0 sampai 24.";
+  if (!(Number.isInteger(jumlah) && jumlah >= 1)) return "Jumlah unit minimal 1.";
+  return null;
+}
+
+function tambah() {
+  const nama = $("nama").value.trim();
+  const daya = parseFloat($("daya").value);
+  const jam = parseFloat($("jam").value);
+  const jumlah = parseInt($("jumlah").value, 10);
+  const err = validasi(nama, daya, jam, jumlah);
+  $("pesan").textContent = err || "";
+  if (err) return;
+  perangkat.push({ nama, daya, jam, jumlah });
+  ["nama", "daya", "jam"].forEach(id => $(id).value = "");
+  $("jumlah").value = 1;
+  tampilkan();
+}
+
+function hapus(i) { perangkat.splice(i, 1); tampilkan(); }
+function resetData() { perangkat = []; $("pesan").textContent = ""; tampilkan(); }
+
+function tampilkan() {
+  const tarif = parseFloat($("tarif").value) || 0;
+  const data = perangkat.map((p, idx) => {
+    const kwh = hitungKWh(p.daya, p.jam, p.jumlah);
+    return { ...p, idx, kwh, biaya: hitungBiaya(kwh, tarif) };
+  });
+  const totalKWh = data.reduce((s, p) => s + p.kwh, 0);
+  data.forEach(p => p.persen = hitungPersen(p.kwh, totalKWh));
+  const ranking = urutkanTurun(data, "kwh");
+
+  $("tabel").innerHTML = ranking.map((p, i) => `
+    <tr>
+      <td>${i + 1}</td><td>${esc(p.nama)}</td><td>${angka(p.kwh)}</td>
+      <td>${rp(p.biaya)}</td><td>${angka(p.persen)}%</td>
+      <td><button onclick="hapus(${p.idx})">Hapus</button></td>
+    </tr>`).join("");
+
+  const daftarKWh = data.map(p => p.kwh);
+  $("totalKWh").textContent = angka(totalKWh) + " kWh";
+  $("totalBiaya").textContent = rp(hitungBiaya(totalKWh, tarif));
+  $("rataKWh").textContent = angka(daftarKWh.length ? totalKWh / daftarKWh.length : 0) + " kWh";
+  $("medianKWh").textContent = angka(median(daftarKWh)) + " kWh";
+
+  $("pilihSim").innerHTML = data.map(p => `<option value="${p.idx}">${esc(p.nama)}</option>`).join("");
+
+  if (chart) chart.destroy();
+  chart = new Chart($("grafik"), {
+    type: "bar",
+    data: {
+      labels: ranking.map(p => p.nama),
+      datasets: [{ label: "kWh per bulan", data: ranking.map(p => p.kwh), backgroundColor: "#f39c12" }]
+    },
+    options: { responsive: true, plugins: { legend: { display: false } } }
+  });
+
+  const langkah = $("langkah");
+  langkah.style.display = $("mode").checked ? "block" : "none";
+  langkah.textContent = ranking.map(p =>
+    `${p.nama}: ${p.daya} W × ${p.jam} jam × ${p.jumlah} unit × 30 ÷ 1000\n` +
+    `  = ${angka(p.kwh)} kWh\n` +
+    `  biaya = ${angka(p.kwh)} × ${tarif} = ${rp(p.biaya)}\n` +
+    `  kontribusi = ${angka(p.kwh)} ÷ ${angka(totalKWh)} × 100% = ${angka(p.persen)}%`
+  ).join("\n\n") || "Belum ada data.";
+}
+
+function simulasi() {
+  const i = parseInt($("pilihSim").value, 10);
+  const jamKurang = parseFloat($("jamKurang").value);
+  const tarif = parseFloat($("tarif").value) || 0;
+  const p = perangkat[i];
+  if (!p || !(jamKurang > 0 && jamKurang <= p.jam)) {
+    $("hasilSim").textContent = "Pilih perangkat dan isi pengurangan jam (tidak boleh melebihi jam pemakaian).";
+    return;
+  }
+  const hemat = hitungKWh(p.daya, jamKurang, p.jumlah);
+  $("hasilSim").innerHTML = `Jika ${esc(p.nama)} dikurangi ${jamKurang} jam/hari:<br>
+    Hemat <b>${angka(hemat)} kWh/bulan</b>, setara <b>${rp(hitungBiaya(hemat, tarif))}/bulan</b>`;
+}
+
+// Data contoh awal
+perangkat = [
+  { nama: "AC 1 PK", daya: 750, jam: 8, jumlah: 1 },
+  { nama: "Lampu LED", daya: 10, jam: 12, jumlah: 1 },
+  { nama: "Kulkas", daya: 100, jam: 10, jumlah: 1 }
+];
+tampilkan();
+</script>
+</body>
+</html>
